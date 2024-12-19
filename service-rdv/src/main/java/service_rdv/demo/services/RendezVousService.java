@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import service_rdv.demo.models.RendezVous;
 import service_rdv.demo.repositories.RendezVousRepository;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 
 import java.time.LocalDateTime;
@@ -60,6 +61,7 @@ public class RendezVousService {
         }
     }
 
+    @CircuitBreaker(name = "externalServiceBreaker", fallbackMethod = "saveRendezVousFallback")
     @Retry(name = "externalServiceRetry", fallbackMethod = "saveRendezVousFallback")
     public ResponseEntity<RendezVous> saveRendezVous(RendezVous rendezVous) {
         try {
@@ -82,7 +84,7 @@ public class RendezVousService {
                 return ResponseEntity.badRequest().build();
             }
 
-            // Générer le lien Google Calendar
+            // Générer le lien Google Calendar avec Circuit Breaker
             String calendarLink = googleCalendarService.generateGoogleCalendarLink(
                     "Rendez-vous médical - " + rendezVous.getMotif(),
                     rendezVous.getDateHeure(),
@@ -98,20 +100,15 @@ public class RendezVousService {
         }
     }
 
-    // Méthode de fallback
+    // Méthode de fallback améliorée
     public ResponseEntity<RendezVous> saveRendezVousFallback(RendezVous rendezVous, Throwable e) {
-        // Vérification basique sans appel aux services externes
-        if (!isValidRendezVous(rendezVous)) {
-            return ResponseEntity.badRequest().build();
-        }
-
         try {
-            // On sauvegarde le rendez-vous avec une note indiquant que les vérifications
-            // externes ont échoué
+            // Sauvegarde en mode dégradé
             rendezVous.setStatut("EN_ATTENTE_VERIFICATION");
+            String errorMessage = "Service temporairement indisponible. Erreur: " +
+                    (e instanceof Exception ? e.getMessage() : "Circuit ouvert");
             rendezVous.setNotes((rendezVous.getNotes() != null ? rendezVous.getNotes() : "") +
-                    "\nATTENTION: Les services externes sont temporairement indisponibles. " +
-                    "Une vérification manuelle est nécessaire.");
+                    "\nATTENTION: " + errorMessage);
 
             RendezVous savedRendezVous = rendezVousRepository.save(rendezVous);
             return ResponseEntity.ok(savedRendezVous);

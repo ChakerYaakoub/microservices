@@ -16,6 +16,8 @@ import java.util.Collections;
 public class DossierMedicalService {
 
     private static final String DOSSIER_MEDICAL_SERVICE = "dossierMedicalService";
+    private static final String PATIENT_SERVICE = "patientService";
+    private static final String PRATICIEN_SERVICE = "praticienService";
 
     @Autowired
     private DossierMedicalRepository dossierMedicalRepository;
@@ -53,23 +55,18 @@ public class DossierMedicalService {
         return ResponseEntity.notFound().build();
     }
 
-    @CircuitBreaker(name = DOSSIER_MEDICAL_SERVICE, fallbackMethod = "getDossiersMedicauxByPatientFallback")
-    @Retry(name = DOSSIER_MEDICAL_SERVICE)
+    @CircuitBreaker(name = PATIENT_SERVICE, fallbackMethod = "getDossiersMedicauxByPatientFallback")
+    @Retry(name = PATIENT_SERVICE)
     public ResponseEntity<List<DossierMedical>> getDossiersMedicauxByPatient(Long patientId) {
         try {
-            // Vérifier si le patient existe
-            ResponseEntity<Object> patientResponse = restTemplate.getForEntity(
-                    "http://localhost:8081/api/patients/" + patientId,
-                    Object.class);
-
-            if (!patientResponse.getStatusCode().is2xxSuccessful()) {
+            if (!validatePatient(patientId)) {
                 return ResponseEntity.notFound().build();
             }
 
             List<DossierMedical> dossiers = dossierMedicalRepository.findByPatientId(patientId);
             return ResponseEntity.ok(dossiers);
         } catch (Exception e) {
-            throw e; // Laisser l'exception se propager pour le retry
+            throw e;
         }
     }
 
@@ -78,22 +75,18 @@ public class DossierMedicalService {
         return ResponseEntity.ok(Collections.emptyList());
     }
 
-    @CircuitBreaker(name = DOSSIER_MEDICAL_SERVICE, fallbackMethod = "getDossiersMedicauxByPraticienFallback")
-    @Retry(name = DOSSIER_MEDICAL_SERVICE)
+    @CircuitBreaker(name = PRATICIEN_SERVICE, fallbackMethod = "getDossiersMedicauxByPraticienFallback")
+    @Retry(name = PRATICIEN_SERVICE)
     public ResponseEntity<List<DossierMedical>> getDossiersMedicauxByPraticien(Long praticienId) {
         try {
-            ResponseEntity<Object> praticienResponse = restTemplate.getForEntity(
-                    "http://localhost:8082/api/praticiens/" + praticienId,
-                    Object.class);
-
-            if (!praticienResponse.getStatusCode().is2xxSuccessful()) {
+            if (!validatePraticien(praticienId)) {
                 return ResponseEntity.notFound().build();
             }
 
             List<DossierMedical> dossiers = dossierMedicalRepository.findByPraticienId(praticienId);
             return ResponseEntity.ok(dossiers);
         } catch (Exception e) {
-            throw e; // Laisser l'exception se propager pour le retry
+            throw e;
         }
     }
 
@@ -110,25 +103,17 @@ public class DossierMedicalService {
                 return ResponseEntity.badRequest().build();
             }
 
-            // Vérifier si le patient existe
-            ResponseEntity<Object> patientResponse = restTemplate.getForEntity(
-                    "http://localhost:8081/api/patients/" + dossierMedical.getPatientId(),
-                    Object.class);
+            boolean patientValid = validatePatient(dossierMedical.getPatientId());
+            boolean praticienValid = validatePraticien(dossierMedical.getPraticienId());
 
-            // Vérifier si le praticien existe
-            ResponseEntity<Object> praticienResponse = restTemplate.getForEntity(
-                    "http://localhost:8082/api/praticiens/" + dossierMedical.getPraticienId(),
-                    Object.class);
-
-            if (!patientResponse.getStatusCode().is2xxSuccessful() ||
-                    !praticienResponse.getStatusCode().is2xxSuccessful()) {
+            if (!patientValid || !praticienValid) {
                 return ResponseEntity.badRequest().build();
             }
 
             DossierMedical savedDossier = dossierMedicalRepository.save(dossierMedical);
             return ResponseEntity.ok(savedDossier);
         } catch (Exception e) {
-            throw e; // Laisser l'exception se propager pour le retry
+            throw e;
         }
     }
 
@@ -159,5 +144,41 @@ public class DossierMedicalService {
         return dossierMedical != null
                 && dossierMedical.getPatientId() != null
                 && dossierMedical.getPraticienId() != null;
+    }
+
+    @CircuitBreaker(name = PATIENT_SERVICE, fallbackMethod = "validatePatientFallback")
+    @Retry(name = PATIENT_SERVICE)
+    private boolean validatePatient(Long patientId) {
+        try {
+            ResponseEntity<Object> response = restTemplate.getForEntity(
+                    "http://localhost:8081/api/patients/" + patientId,
+                    Object.class);
+            return response.getStatusCode().is2xxSuccessful();
+        } catch (Exception e) {
+            throw e;
+        }
+    }
+
+    private boolean validatePatientFallback(Long patientId, Exception e) {
+        System.out.println("Fallback: Impossible de valider le patient " + patientId);
+        return false;
+    }
+
+    @CircuitBreaker(name = PRATICIEN_SERVICE, fallbackMethod = "validatePraticienFallback")
+    @Retry(name = PRATICIEN_SERVICE)
+    private boolean validatePraticien(Long praticienId) {
+        try {
+            ResponseEntity<Object> response = restTemplate.getForEntity(
+                    "http://localhost:8082/api/praticiens/" + praticienId,
+                    Object.class);
+            return response.getStatusCode().is2xxSuccessful();
+        } catch (Exception e) {
+            throw e;
+        }
+    }
+
+    private boolean validatePraticienFallback(Long praticienId, Exception e) {
+        System.out.println("Fallback: Impossible de valider le praticien " + praticienId);
+        return false;
     }
 }
