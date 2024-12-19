@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import service_rdv.demo.models.RendezVous;
 import service_rdv.demo.repositories.RendezVousRepository;
+import io.github.resilience4j.retry.annotation.Retry;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -59,6 +60,7 @@ public class RendezVousService {
         }
     }
 
+    @Retry(name = "externalServiceRetry", fallbackMethod = "saveRendezVousFallback")
     public ResponseEntity<RendezVous> saveRendezVous(RendezVous rendezVous) {
         try {
             if (!isValidRendezVous(rendezVous)) {
@@ -67,34 +69,53 @@ public class RendezVousService {
 
             // Vérifier si le patient existe
             ResponseEntity<Object> patientResponse = restTemplate.getForEntity(
-                "http://localhost:8081/api/patients/" + rendezVous.getPatientId(), 
-                Object.class
-            );
+                    "http://localhost:8081/api/patients/" + rendezVous.getPatientId(),
+                    Object.class);
 
             // Vérifier si le praticien existe
             ResponseEntity<Object> praticienResponse = restTemplate.getForEntity(
-                "http://localhost:8082/api/praticiens/" + rendezVous.getPraticienId(), 
-                Object.class
-            );
+                    "http://localhost:8082/api/praticiens/" + rendezVous.getPraticienId(),
+                    Object.class);
 
-            if (!patientResponse.getStatusCode().is2xxSuccessful() || 
-                !praticienResponse.getStatusCode().is2xxSuccessful()) {
+            if (!patientResponse.getStatusCode().is2xxSuccessful() ||
+                    !praticienResponse.getStatusCode().is2xxSuccessful()) {
                 return ResponseEntity.badRequest().build();
             }
 
             // Générer le lien Google Calendar
             String calendarLink = googleCalendarService.generateGoogleCalendarLink(
-                "Rendez-vous médical - " + rendezVous.getMotif(),
-                rendezVous.getDateHeure(),
-                rendezVous.getDateHeure().plusHours(1), // durée par défaut 1h
-                rendezVous.getNotes(),
-                "Cabinet médical" // à adapter selon vos besoins
-            );
-            
+                    "Rendez-vous médical - " + rendezVous.getMotif(),
+                    rendezVous.getDateHeure(),
+                    rendezVous.getDateHeure().plusHours(1),
+                    rendezVous.getNotes(),
+                    "Cabinet médical");
+
             rendezVous.setNotes(rendezVous.getNotes() + "\nLien Calendar: " + calendarLink);
             RendezVous savedRendezVous = rendezVousRepository.save(rendezVous);
             return ResponseEntity.ok(savedRendezVous);
         } catch (Exception e) {
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    // Méthode de fallback
+    public ResponseEntity<RendezVous> saveRendezVousFallback(RendezVous rendezVous, Throwable e) {
+        // Vérification basique sans appel aux services externes
+        if (!isValidRendezVous(rendezVous)) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        try {
+            // On sauvegarde le rendez-vous avec une note indiquant que les vérifications
+            // externes ont échoué
+            rendezVous.setStatut("EN_ATTENTE_VERIFICATION");
+            rendezVous.setNotes((rendezVous.getNotes() != null ? rendezVous.getNotes() : "") +
+                    "\nATTENTION: Les services externes sont temporairement indisponibles. " +
+                    "Une vérification manuelle est nécessaire.");
+
+            RendezVous savedRendezVous = rendezVousRepository.save(rendezVous);
+            return ResponseEntity.ok(savedRendezVous);
+        } catch (Exception ex) {
             return ResponseEntity.internalServerError().build();
         }
     }
@@ -119,4 +140,4 @@ public class RendezVousService {
                 && rendezVous.getDateHeure().isAfter(LocalDateTime.now())
                 && rendezVous.getMotif() != null && !rendezVous.getMotif().trim().isEmpty();
     }
-} 
+}
